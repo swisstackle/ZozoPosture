@@ -4,6 +4,7 @@ import cv2
 import sys
 import numpy as np
 from scipy.spatial import KDTree
+from collections import defaultdict
 
 def scale_preview(preview_img, max_preview_size=(1800, 960)):
     scale_fac = min(max_preview_size[1] / preview_img.shape[0], max_preview_size[0] / preview_img.shape[1], 1)
@@ -11,13 +12,14 @@ def scale_preview(preview_img, max_preview_size=(1800, 960)):
                            interpolation=cv2.INTER_CUBIC)
     return scaled_im, scale_fac
 
-def filter_isolated_markers(positions, radius=10, amount = 2):
+def filter_isolated_markers(positions, radius=10, amount=2):
     """
     Filters out markers with no neighbors within the specified radius using a KD-tree.
     
     Args:
         positions: List of (x, y) coordinates of detected markers.
-        radius: Distance threshold in pixels (default: 40).
+        radius: Distance threshold in pixels (default: 10).
+        amount: Minimum number of neighbors required (default: 2).
     
     Returns:
         List of indices of non-isolated markers.
@@ -25,13 +27,8 @@ def filter_isolated_markers(positions, radius=10, amount = 2):
     if len(positions) < 2:
         return []  # If there’s only one or no markers, consider them isolated
 
-    # Create a KD-tree from the marker positions
     tree = KDTree(positions)
-    
-    # Find neighbors within the radius (includes the point itself)
     neighbors = tree.query_ball_point(positions, r=radius, p=2, return_sorted=False)
-    
-    # Keep markers with at least one neighbor (len > 1 because it counts itself)
     filtered_indices = [i for i, n in enumerate(neighbors) if len(n) > amount]
     
     return filtered_indices
@@ -53,7 +50,7 @@ def detect_points(img):
             marker_types.append("Unknown")
     
     # Filter out isolated markers
-    filtered_indices = filter_isolated_markers(positions, radius=30, amount = 7)
+    filtered_indices = filter_isolated_markers(positions, radius=30, amount=7)
     
     # Retain only non-isolated markers
     filtered_marker_types = [marker_types[i] for i in filtered_indices]
@@ -90,15 +87,59 @@ if __name__ == '__main__':
     im_preview, scale_factor = scale_preview(im_draw)
     cv2.imshow('Point positions', im_preview)
     key = cv2.waitKey(0)
-        # Create a blank canvas with the same dimensions as the original image
+
+    # Create a blank canvas with the same dimensions as the original image
     marker_only_img = np.zeros_like(im)
     
     # Draw only the filtered markers on the blank canvas
     for i in range(len(marker_types)):
         cv2.ellipse(marker_only_img, raw_data[i]["ellipse"], color=(0, 255, 0), thickness=3)
-    
+
     # Save and display the marker-only image
     cv2.imwrite("markers_only.png", marker_only_img)
     cv2.imshow('Markers Only', scale_preview(marker_only_img)[0])
     key = cv2.waitKey(0)
+
+    # Step 1: Group markers by row (y-coordinate) and find leftmost markers
+    markers_by_row = defaultdict(list)
+    for i in range(len(positions)):
+        y = int(positions[i][1])  # y-coordinate
+        x = int(positions[i][0])  # x-coordinate
+        markers_by_row[y].append(x)
+
+    # Find the leftmost marker (smallest x-coordinate) for each row
+    leftmost_markers = []
+    for y, xs in markers_by_row.items():
+        min_x = min(xs)  # Smallest x is the leftmost marker
+        leftmost_markers.append((min_x, y))
+
+    # Convert leftmost markers to numpy array for binning
+    positions = np.array(leftmost_markers)
+
+    # Step 2: Define the body region
+    x_min, x_max = positions[:, 0].min(), positions[:, 0].max()
+    y_min, y_max = positions[:, 1].min(), positions[:, 1].max()
+
+    # Step 3: Isolate candidate back points with binning
+    bin_size = 15  # Adjust bin size as needed
+    bins = np.arange(y_min, y_max + bin_size, bin_size)
+    back_points = []
+    for y_start in bins:
+        y_end = y_start + bin_size
+        bin_points = positions[(positions[:, 1] >= y_start) & (positions[:, 1] < y_end)]
+        if len(bin_points) > 0:
+            leftmost = bin_points[np.argmin(bin_points[:, 0])]
+            back_points.append(leftmost)
+
+    # Create a blank image for the back outline
+    back_outline_img = np.zeros_like(im)
+
+    # Draw the binned leftmost markers as small green circles
+    for x, y in back_points:
+        cv2.circle(back_outline_img, (int(x), int(y)), radius=5, color=(0, 255, 0), thickness=3)
+
+    # Save and display the back outline
+    cv2.imwrite("back_outline.png", back_outline_img)
+    cv2.imshow('Back Outline', back_outline_img)
+    cv2.waitKey(0)
     cv2.destroyAllWindows()
