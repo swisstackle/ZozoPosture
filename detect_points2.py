@@ -114,14 +114,11 @@ if __name__ == '__main__':
         min_x = min(xs)  # Smallest x is the leftmost marker
         leftmost_markers.append((min_x, y))
 
-    # Convert leftmost markers to numpy array for binning
+    # Convert leftmost markers to numpy array for processing
     positions = np.array(leftmost_markers)
 
-    # Step 2: Define the body region
-    x_min, x_max = positions[:, 0].min(), positions[:, 0].max()
+    # Step 2: Identify the region of interest
     y_min, y_max = positions[:, 1].min(), positions[:, 1].max()
-
-    # Step 3: Isolate candidate back points with binning
     bin_size = 15  # Adjust bin size as needed
     bins = np.arange(y_min, y_max + bin_size, bin_size)
     back_points = []
@@ -134,27 +131,88 @@ if __name__ == '__main__':
 
     back_points = np.array(back_points)
 
-    # Step 4: Smooth the outline using spline interpolation
-    if len(back_points) > 3:  # Need at least 4 points for spline
-        y_smooth = np.linspace(back_points[:, 1].min(), back_points[:, 1].max(), 100)
-        spline = splrep(back_points[:, 1], back_points[:, 0], s=1000)
-        x_smooth = splev(y_smooth, spline)
+    # Step 3: Fit an initial polynomial curve
+    if len(back_points) > 3:
+        y_values = back_points[:, 1]
+        x_values = back_points[:, 0]
+        degree = 3  # Cubic polynomial
+        coefficients = np.polyfit(y_values, x_values, degree)
+        x_pred = np.polyval(coefficients, y_values)
 
-        # Create a blank image for the back outline
-        back_outline_img = np.zeros_like(im)
+        # Step 4: Filter outliers
+        residuals = x_values - x_pred
+        threshold = 1 * np.std(residuals)
+        inliers = np.abs(residuals) < threshold
+        filtered_positions = back_points[inliers]
 
-        # Draw the smoothed back outline
-        for i in range(len(y_smooth) - 1):
-            cv2.line(back_outline_img, 
-                     (int(x_smooth[i]), int(y_smooth[i])), 
-                     (int(x_smooth[i + 1]), int(y_smooth[i + 1])), 
-                     color=(0, 255, 0), thickness=3)
+        # Step 5: Fit a refined spline curve
+        if len(filtered_positions) > 3:
+            y_smooth = np.linspace(filtered_positions[:, 1].min(), filtered_positions[:, 1].max(), 100)
+            spline = splrep(filtered_positions[:, 1], filtered_positions[:, 0], s=250)
+            x_smooth = splev(y_smooth, spline)
 
-        # Save and display the back outline
-        cv2.imwrite("back_outline.png", back_outline_img)
-        cv2.imshow('Back Outline', back_outline_img)
-        cv2.waitKey(0)
+            # Create a blank image for the back outline
+            back_outline_img = np.zeros_like(im)
+
+            # Draw the smoothed back outline
+            for i in range(len(y_smooth) - 1):
+                cv2.line(back_outline_img, 
+                         (int(x_smooth[i]), int(y_smooth[i])), 
+                         (int(x_smooth[i + 1]), int(y_smooth[i + 1])), 
+                         color=(0, 255, 0), thickness=3)
+
+            # Save and display the back outline
+            cv2.imwrite("back_outline.png", back_outline_img)
+            cv2.imshow('Back Outline', back_outline_img)
+            cv2.waitKey(0)
+
+            # Step 6: Analyze Spine Curvature and Alignment
+            # Compute first and second derivatives using finite differences
+            x_prime = np.gradient(x_smooth, y_smooth)
+            x_double_prime = np.gradient(x_prime, y_smooth)
+            y_prime = np.gradient(np.ones_like(y_smooth), y_smooth)  # y is linear, so y' = 1
+            y_double_prime = np.gradient(y_prime, y_smooth)  # y'' = 0, but included for consistency
+
+            print(f'x_prime: {x_prime}')
+            print(f'x_double_prime: {x_double_prime}')
+
+            # Calculate curvature at each point
+            curvature = np.abs(x_prime * y_double_prime - y_prime * x_double_prime) / (x_prime**2 + y_prime**2)**1.5
+            curvature = np.nan_to_num(curvature, nan=0.0)  # Handle any NaN values
+
+            print(curvature)
+
+            # Step 7: Analyze Upper and Lower Spine Curvature
+            y_mid = np.median(y_smooth)
+            upper_mask = y_smooth <= y_mid
+            lower_mask = y_smooth > y_mid
+
+            print(upper_mask)
+            print(lower_mask)
+            print(np.mean(curvature[upper_mask]))
+
+            curvature_upper = np.mean(curvature[upper_mask]) if np.any(upper_mask) else 0.0
+            curvature_lower = np.mean(curvature[lower_mask]) if np.any(lower_mask) else 0.0
+
+            # Step 8: Assess Overall Alignment
+            # Fit a linear regression to get the slope
+            slope, _ = np.polyfit(y_smooth, x_smooth, 1)
+            
+            # Calculate centroid for additional alignment insight
+            x_centroid = np.mean(x_smooth)
+            y_centroid = np.mean(y_smooth)
+            image_center_x = im.shape[1] / 2  # Center of the image horizontally
+            lean_offset = x_centroid - image_center_x  # Positive = lean right, negative = lean left
+
+            # Output analysis
+            print(f"Upper Spine Curvature: {curvature_upper:.4f}")
+            print(f"Lower Spine Curvature: {curvature_lower:.4f}")
+            print(f"Overall Spine Slope (Alignment): {slope:.4f} (Positive = lean right, Negative = lean left)")
+            print(f"Spine Centroid Lean Offset: {lean_offset:.2f} pixels (relative to image center)")
+
+        else:
+            print("Not enough points to fit a spline for the back outline.")
     else:
-        print("Not enough points to fit a spline for the back outline.")
+        print("Not enough points to fit an initial curve.")
 
     cv2.destroyAllWindows()
