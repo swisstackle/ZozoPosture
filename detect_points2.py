@@ -5,6 +5,7 @@ import sys
 import numpy as np
 from scipy.spatial import KDTree
 from collections import defaultdict
+from scipy.interpolate import splrep, splev
 
 def scale_preview(preview_img, max_preview_size=(1800, 960)):
     scale_fac = min(max_preview_size[1] / preview_img.shape[0], max_preview_size[0] / preview_img.shape[1], 1)
@@ -131,15 +132,29 @@ if __name__ == '__main__':
             leftmost = bin_points[np.argmin(bin_points[:, 0])]
             back_points.append(leftmost)
 
-    # Create a blank image for the back outline
-    back_outline_img = np.zeros_like(im)
+    back_points = np.array(back_points)
 
-    # Draw the binned leftmost markers as small green circles
-    for x, y in back_points:
-        cv2.circle(back_outline_img, (int(x), int(y)), radius=5, color=(0, 255, 0), thickness=3)
+    # Step 4: Smooth the outline using spline interpolation
+    if len(back_points) > 3:  # Need at least 4 points for spline
+        y_smooth = np.linspace(back_points[:, 1].min(), back_points[:, 1].max(), 100)
+        spline = splrep(back_points[:, 1], back_points[:, 0], s=1000)
+        x_smooth = splev(y_smooth, spline)
 
-    # Save and display the back outline
-    cv2.imwrite("back_outline.png", back_outline_img)
-    cv2.imshow('Back Outline', back_outline_img)
-    cv2.waitKey(0)
+        # Create a blank image for the back outline
+        back_outline_img = np.zeros_like(im)
+
+        # Draw the smoothed back outline
+        for i in range(len(y_smooth) - 1):
+            cv2.line(back_outline_img, 
+                     (int(x_smooth[i]), int(y_smooth[i])), 
+                     (int(x_smooth[i + 1]), int(y_smooth[i + 1])), 
+                     color=(0, 255, 0), thickness=3)
+
+        # Save and display the back outline
+        cv2.imwrite("back_outline.png", back_outline_img)
+        cv2.imshow('Back Outline', back_outline_img)
+        cv2.waitKey(0)
+    else:
+        print("Not enough points to fit a spline for the back outline.")
+
     cv2.destroyAllWindows()
