@@ -149,7 +149,8 @@ if __name__ == '__main__':
         if len(filtered_positions) > 3:
             y_smooth = np.linspace(filtered_positions[:, 1].min(), filtered_positions[:, 1].max(), 100)
             spline = splrep(filtered_positions[:, 1], filtered_positions[:, 0], s=250)
-            x_smooth = splev(y_smooth, spline)
+
+            x_smooth = splev(y_smooth, spline, der=0)       # x(y)
 
             # Create a blank image for the back outline
             back_outline_img = np.zeros_like(im)
@@ -166,30 +167,25 @@ if __name__ == '__main__':
             cv2.imshow('Back Outline', back_outline_img)
             cv2.waitKey(0)
 
+            # Compute x and its derivatives
+            x_prime = splev(y_smooth, spline, der=1)        # dx/dy
+            x_double_prime = splev(y_smooth, spline, der=2) # d²x/dy²
+
             # Step 6: Analyze Spine Curvature and Alignment
             # Compute first and second derivatives using finite differences
-            x_prime = np.gradient(x_smooth, y_smooth)
-            x_double_prime = np.gradient(x_prime, y_smooth)
             y_prime = np.gradient(np.ones_like(y_smooth), y_smooth)  # y is linear, so y' = 1
             y_double_prime = np.gradient(y_prime, y_smooth)  # y'' = 0, but included for consistency
 
-            print(f'x_prime: {x_prime}')
-            print(f'x_double_prime: {x_double_prime}')
-
             # Calculate curvature at each point
-            curvature = np.abs(x_prime * y_double_prime - y_prime * x_double_prime) / (x_prime**2 + y_prime**2)**1.5
-            curvature = np.nan_to_num(curvature, nan=0.0)  # Handle any NaN values
+            curvature = np.abs(x_double_prime) / (1 + x_prime**2)**1.5
 
-            print(curvature)
 
             # Step 7: Analyze Upper and Lower Spine Curvature
             y_mid = np.median(y_smooth)
             upper_mask = y_smooth <= y_mid
             lower_mask = y_smooth > y_mid
 
-            print(upper_mask)
-            print(lower_mask)
-            print(np.mean(curvature[upper_mask]))
+
 
             curvature_upper = np.mean(curvature[upper_mask]) if np.any(upper_mask) else 0.0
             curvature_lower = np.mean(curvature[lower_mask]) if np.any(lower_mask) else 0.0
